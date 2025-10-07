@@ -1,0 +1,215 @@
+# views.py
+
+from django.shortcuts import render, redirect
+from django.contrib import messages
+from django.views.decorators.http import require_http_methods
+from django.views.decorators.csrf import csrf_protect
+from django.conf import settings
+from django.http import JsonResponse
+from django.core.exceptions import ValidationError
+
+from .forms import ContactForm
+from .models import ContactMessage, BlockedIP, BlockedEmail
+from .utils import get_client_ip, send_contact_email, verify_recaptcha
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@csrf_protect
+@require_http_methods(["GET", "POST"])
+def contact_view(request):
+    """
+    Handle contact form submission with security measures
+    """
+    if request.method == 'POST':
+        return handle_contact_post(request)
+    else:
+        # GET request - display form
+        form = ContactForm()
+        context = {
+            'form': form,
+            'recaptcha_site_key': getattr(settings, 'RECAPTCHA_PUBLIC_KEY', '')
+        }
+        return render(request, 'contact.html', context)
+
+
+def handle_contact_post(request):
+    """Handle POST request for contact form"""
+    
+    # Get client IP
+    client_ip = get_client_ip(request)
+    user_agent = request.META.get('HTTP_USER_AGENT', '')
+    
+    # Check if IP is blocked
+    if BlockedIP.is_blocked(client_ip):
+        logger.warning(f"Blocked IP attempted contact: {client_ip}")
+        messages.error(request, "Your request cannot be processed.")
+        return redirect('contact')
+    
+    # Check rate limiting
+    contact_settings = getattr(settings, 'CONTACT_FORM_SETTINGS', {})
+    rate_limit = contact_settings.get('RATE_LIMIT_MESSAGES', 3)
+    
+    recent_count = ContactMessage.get_recent_submissions_count(client_ip, hours=1)
+    if recent_count >= rate_limit:
+        logger.warning(f"Rate limit exceeded for IP: {client_ip}")
+        messages.error(
+            request,
+            "You have reached the maximum number of messages per hour. Please try again later."
+        )
+        return redirect('contact')
+    
+    # Validate form
+    form = ContactForm(request.POST)
+    
+    if not form.is_valid():
+        messages.error(request, "Please correct the errors below.")
+        context = {
+            'form': form,
+            'recaptcha_site_key': getattr(settings, 'RECAPTCHA_PUBLIC_KEY', '')
+        }
+        return render(request, 'contact.html', context)
+    
+    # Verify reCAPTCHA if enabled
+    if contact_settings.get('ENABLE_RECAPTCHA', False):
+        recaptcha_response = request.POST.get('g-recaptcha-response')
+        if not verify_recaptcha(recaptcha_response):
+            logger.warning(f"reCAPTCHA verification failed for IP: {client_ip}")
+            messages.error(request, "Please complete the reCAPTCHA verification.")
+            context = {
+                'form': form,
+                'recaptcha_site_key': getattr(settings, 'RECAPTCHA_PUBLIC_KEY', '')
+            }
+            return render(request, 'contact.html', context)
+    
+    # Get cleaned data
+    name = form.cleaned_data['name']
+    email = form.cleaned_data['email']
+    message = form.cleaned_data['message']
+    
+    # Save to database
+    contact_instance = ContactMessage.objects.create(
+        name=name,
+        email=email,
+        message=message,
+        ip_address=client_ip,
+        user_agent=user_agent
+    )
+    
+    # Send email
+    try:
+        email_sent = send_contact_email(name, email, message, contact_instance)
+        
+        if email_sent:
+            messages.success(
+                request,
+                "Thank you for your message! I'll get back to you soon."
+            )
+            logger.info(f"Contact form submitted successfully by {email} from {client_ip}")
+        else:
+            messages.warning(
+                request,
+                "Your message was received but there was an issue sending the notification. I'll still review it."
+            )
+            logger.error(f"Email sending failed for submission from {email}")
+        
+    except Exception as e:
+        logger.error(f"Unexpected error processing contact form: {str(e)}")
+        messages.error(
+            request,
+            "An error occurred while processing your message. Please try again later."
+        )
+    
+    return redirect('contact')
+
+
+@csrf_protect
+@require_http_methods(["POST"])
+def contact_ajax_view(request):
+    """
+    AJAX version of contact form submission
+    Returns JSON response
+    """
+    client_ip = get_client_ip(request)
+    user_agent = request.META.get('HTTP_USER_AGENT', '')
+    
+    # Check if IP is blocked
+    if BlockedIP.is_blocked(client_ip):
+        logger.warning(f"Blocked IP attempted contact via AJAX: {client_ip}")
+        return JsonResponse({
+            'success': False,
+            'message': 'Your request cannot be processed.'
+        }, status=403)
+    
+    # Check rate limiting
+    contact_settings = getattr(settings, 'CONTACT_FORM_SETTINGS', {})
+    rate_limit = contact_settings.get('RATE_LIMIT_MESSAGES', 3)
+    
+    recent_count = ContactMessage.get_recent_submissions_count(client_ip, hours=1)
+    if recent_count >= rate_limit:
+        logger.warning(f"Rate limit exceeded for IP: {client_ip}")
+        return JsonResponse({
+            'success': False,
+            'message': 'You have reached the maximum number of messages per hour.'
+        }, status=429)
+    
+    # Validate form
+    form = ContactForm(request.POST)
+    
+    if not form.is_valid():
+        errors = {field: error[0] for field, error in form.errors.items()}
+        return JsonResponse({
+            'success': False,
+            'message': 'Please correct the errors.',
+            'errors': errors
+        }, status=400)
+    
+    # Verify reCAPTCHA if enabled
+    if contact_settings.get('ENABLE_RECAPTCHA', False):
+        recaptcha_response = request.POST.get('g-recaptcha-response')
+        if not verify_recaptcha(recaptcha_response):
+            logger.warning(f"reCAPTCHA verification failed for IP: {client_ip}")
+            return JsonResponse({
+                'success': False,
+                'message': 'Please complete the reCAPTCHA verification.'
+            }, status=400)
+    
+    # Get cleaned data
+    name = form.cleaned_data['name']
+    email = form.cleaned_data['email']
+    message = form.cleaned_data['message']
+    
+    # Save to database
+    contact_instance = ContactMessage.objects.create(
+        name=name,
+        email=email,
+        message=message,
+        ip_address=client_ip,
+        user_agent=user_agent
+    )
+    
+    # Send email
+    try:
+        email_sent = send_contact_email(name, email, message, contact_instance)
+        
+        if email_sent:
+            logger.info(f"Contact form submitted successfully via AJAX by {email} from {client_ip}")
+            return JsonResponse({
+                'success': True,
+                'message': "Thank you for your message! I'll get back to you soon."
+            })
+        else:
+            logger.error(f"Email sending failed for AJAX submission from {email}")
+            return JsonResponse({
+                'success': True,
+                'message': "Your message was received but there was an issue with notification."
+            })
+        
+    except Exception as e:
+        logger.error(f"Unexpected error processing AJAX contact form: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'message': 'An error occurred while processing your message.'
+        }, status=500)

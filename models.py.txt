@@ -1,0 +1,74 @@
+# models.py
+
+from django.db import models
+from django.utils import timezone
+from datetime import timedelta
+
+class ContactMessage(models.Model):
+    """Store all contact form submissions for tracking and security"""
+    name = models.CharField(max_length=100)
+    email = models.EmailField()
+    message = models.TextField(max_length=5000)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    is_spam = models.BooleanField(default=False)
+    is_sent = models.BooleanField(default=False)
+    
+    class Meta:
+        ordering = ['-submitted_at']
+        indexes = [
+            models.Index(fields=['ip_address', 'submitted_at']),
+            models.Index(fields=['email', 'submitted_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.email} ({self.submitted_at})"
+    
+    @staticmethod
+    def get_recent_submissions_count(ip_address, hours=1):
+        """Get number of submissions from an IP in the last X hours"""
+        time_threshold = timezone.now() - timedelta(hours=hours)
+        return ContactMessage.objects.filter(
+            ip_address=ip_address,
+            submitted_at__gte=time_threshold
+        ).count()
+
+
+class BlockedIP(models.Model):
+    """Store blocked IP addresses"""
+    ip_address = models.GenericIPAddressField(unique=True)
+    reason = models.CharField(max_length=255)
+    blocked_at = models.DateTimeField(auto_now_add=True)
+    is_permanent = models.BooleanField(default=False)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-blocked_at']
+    
+    def __str__(self):
+        return f"{self.ip_address} - {self.reason}"
+    
+    @staticmethod
+    def is_blocked(ip_address):
+        """Check if an IP is currently blocked"""
+        now = timezone.now()
+        return BlockedIP.objects.filter(
+            ip_address=ip_address
+        ).filter(
+            models.Q(is_permanent=True) | 
+            models.Q(expires_at__gt=now)
+        ).exists()
+
+
+class BlockedEmail(models.Model):
+    """Store blocked email addresses or domains"""
+    email_pattern = models.CharField(max_length=255, unique=True)
+    reason = models.CharField(max_length=255)
+    blocked_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-blocked_at']
+    
+    def __str__(self):
+        return f"{self.email_pattern} - {self.reason}"

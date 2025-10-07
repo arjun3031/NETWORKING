@@ -1,0 +1,62 @@
+# settings.py
+
+import os
+from pathlib import Path
+
+# Email Configuration
+# Use environment variables for sensitive data
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'  # For Gmail, change for other providers
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')  # Your email
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')  # App password
+DEFAULT_FROM_EMAIL = os.environ.get('EMAIL_HOST_USER')
+
+# Receiver email (your portfolio email)
+CONTACT_EMAIL_RECEIVER = os.environ.get('CONTACT_EMAIL_RECEIVER', EMAIL_HOST_USER)
+
+# Security settings for contact form
+CONTACT_FORM_SETTINGS = {
+    'MAX_MESSAGE_LENGTH' 5000,
+    'MAX_NAME_LENGTH' 100,
+    'ALLOWED_DOMAINS' [],  # Leave empty to allow all, or specify ['gmail.com', 'outlook.com']
+    'BLOCKED_DOMAINS' ['tempmail.com', '10minutemail.com'],  # Add suspicious domains
+    'RATE_LIMIT_MESSAGES' 3,  # Max messages per IP per hour
+    'ENABLE_RECAPTCHA' True,  # Set to False if not using reCAPTCHA
+}
+
+# Google reCAPTCHA keys (optional but recommended)
+RECAPTCHA_PUBLIC_KEY = os.environ.get('RECAPTCHA_PUBLIC_KEY', '')
+RECAPTCHA_PRIVATE_KEY = os.environ.get('RECAPTCHA_PRIVATE_KEY', '')
+
+# Django security settings (ensure these are set)
+CSRF_COOKIE_SECURE = True  # Set to True in production with HTTPS
+SESSION_COOKIE_SECURE = True  # Set to True in production with HTTPS
+SECURE_SSL_REDIRECT = True  # Redirect HTTP to HTTPS in production
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+
+# Installed apps (add if not present)
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    # Your apps
+    'portfolio',  # Your portfolio app name
+]
+
+# Middleware (ensure CSRF middleware is present)
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',  # Important for CSRF protection
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]

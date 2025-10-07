@@ -1,0 +1,20 @@
+# urls.py (in your app directory)
+
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('contact/', views.contact_view, name='contact'),
+    path('contact/ajax/', views.contact_ajax_view, name='contact_ajax'),
+]
+
+
+# In your main project urls.py, include these urls:
+# 
+# from django.contrib import admin
+# from django.urls import path, include
+# 
+# urlpatterns = [
+#     path('admin/', admin.site.urls),
+#     path('', include('portfolio.urls')),  # Adjust app name as needed
+# ]

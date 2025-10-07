@@ -1,0 +1,55 @@
+# admin.py
+
+from django.contrib import admin
+from django.utils.html import format_html
+from .models import ContactMessage, BlockedIP, BlockedEmail
+
+
+@admin.register(ContactMessage)
+class ContactMessageAdmin(admin.ModelAdmin):
+    list_display = [
+        'name', 'email', 'submitted_at', 
+        'is_sent', 'is_spam', 'ip_address_display'
+    ]
+    list_filter = ['is_sent', 'is_spam', 'submitted_at']
+    search_fields = ['name', 'email', 'message', 'ip_address']
+    readonly_fields = [
+        'name', 'email', 'message', 'ip_address', 
+        'user_agent', 'submitted_at'
+    ]
+    date_hierarchy = 'submitted_at'
+    
+    fieldsets = (
+        ('Contact Information', {
+            'fields': ('name', 'email', 'message')
+        }),
+        ('Submission Details', {
+            'fields': ('ip_address', 'user_agent', 'submitted_at')
+        }),
+        ('Status', {
+            'fields': ('is_sent', 'is_spam')
+        }),
+    )
+    
+    def ip_address_display(self, obj):
+        """Display IP with option to block"""
+        if obj.ip_address:
+            return format_html(
+                '{} <a href="#" onclick="return confirm(\'Block this IP?\')">🚫</a>',
+                obj.ip_address
+            )
+        return '-'
+    ip_address_display.short_description = 'IP Address'
+    
+    actions = ['mark_as_spam', 'mark_as_not_spam', 'block_sender_ip', 'block_sender_email']
+    
+    def mark_as_spam(self, request, queryset):
+        """Mark selected messages as spam"""
+        updated = queryset.update(is_spam=True)
+        self.message_user(request, f'{updated} message(s) marked as spam.')
+    mark_as_spam.short_description = 'Mark as spam'
+    
+    def mark_as_not_spam(self, request, queryset):
+        """Mark selected messages as not spam"""
+        updated = queryset.update(is_spam=False)
+        self.message_user(request, f'{updated} message(s)

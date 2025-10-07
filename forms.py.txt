@@ -1,0 +1,146 @@
+# forms.py
+
+from django import forms
+from django.conf import settings
+from django.core.exceptions import ValidationError
+import re
+import requests
+
+class ContactForm(forms.Form):
+    name = forms.CharField(
+        max_length=100,
+        widget=forms.TextInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'Your Name',
+            'required': True
+        })
+    )
+    
+    email = forms.EmailField(
+        widget=forms.EmailInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'Your Email',
+            'required': True
+        })
+    )
+    
+    message = forms.CharField(
+        max_length=5000,
+        widget=forms.Textarea(attrs={
+            'class': 'form-control',
+            'placeholder': 'Your Message',
+            'rows': 5,
+            'required': True
+        })
+    )
+    
+    # Honeypot field (hidden, should remain empty)
+    honeypot = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            'style': 'display:none',
+            'tabindex': '-1',
+            'autocomplete': 'off'
+        })
+    )
+    
+    def clean_name(self):
+        """Validate and sanitize name"""
+        name = self.cleaned_data.get('name', '').strip()
+        
+        # Check for excessive special characters
+        if len(re.findall(r'[^a-zA-Z\s\-\']', name)) > 2:
+            raise ValidationError("Name contains invalid characters.")
+        
+        # Check for URLs in name
+        if re.search(r'https?://', name, re.IGNORECASE):
+            raise ValidationError("Name cannot contain URLs.")
+        
+        # Check for suspicious patterns
+        if re.search(r'<script|javascript:|onclick', name, re.IGNORECASE):
+            raise ValidationError("Name contains suspicious content.")
+        
+        return name
+    
+    def clean_email(self):
+        """Validate email against blocked domains"""
+        email = self.cleaned_data.get('email', '').lower().strip()
+        domain = email.split('@')[-1] if '@' in email else ''
+        
+        # Check against blocked domains
+        blocked_domains = getattr(settings, 'CONTACT_FORM_SETTINGS', {}).get('BLOCKED_DOMAINS', [])
+        if domain in blocked_domains:
+            raise ValidationError("This email domain is not allowed.")
+        
+        # Check if domain exists (basic validation)
+        if domain and not self._is_valid_domain(domain):
+            raise ValidationError("Please provide a valid email address.")
+        
+        # Check against blocked emails in database
+        from .models import BlockedEmail
+        for blocked in BlockedEmail.objects.all():
+            pattern = blocked.email_pattern.lower()
+            if pattern.startswith('*@'):
+                blocked_domain = pattern[2:]
+                if domain == blocked_domain:
+                    raise ValidationError("This email domain is blocked.")
+            elif pattern == email:
+                raise ValidationError("This email address is blocked.")
+        
+        return email
+    
+    def _is_valid_domain(self, domain):
+        """Basic domain validation"""
+        # Check domain format
+        domain_pattern = r'^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$'
+        if not re.match(domain_pattern, domain, re.IGNORECASE):
+            return False
+        return True
+    
+    def clean_message(self):
+        """Validate and sanitize message"""
+        message = self.cleaned_data.get('message', '').strip()
+        
+        # Check minimum length
+        if len(message) < 10:
+            raise ValidationError("Message is too short. Please provide more details.")
+        
+        # Check for excessive URLs
+        urls = re.findall(r'https?://', message, re.IGNORECASE)
+        if len(urls) > 3:
+            raise ValidationError("Message contains too many URLs.")
+        
+        # Check for suspicious scripts
+        if re.search(r'<script|javascript:|onclick|onerror|onload', message, re.IGNORECASE):
+            raise ValidationError("Message contains suspicious content.")
+        
+        # Check for spam keywords (basic spam detection)
+        spam_keywords = ['viagra', 'cialis', 'lottery', 'winner', 'casino', 
+                        'bitcoin wallet', 'crypto investment', 'get rich']
+        message_lower = message.lower()
+        spam_count = sum(1 for keyword in spam_keywords if keyword in message_lower)
+        if spam_count >= 2:
+            raise ValidationError("Message appears to be spam.")
+        
+        return message
+    
+    def clean_honeypot(self):
+        """Honeypot field should be empty"""
+        honeypot = self.cleaned_data.get('honeypot', '')
+        if honeypot:
+            raise ValidationError("Bot detected.")
+        return honeypot
+    
+    def clean(self):
+        """Additional cross-field validation"""
+        cleaned_data = super().clean()
+        
+        # Check if name and message are too similar (copy-paste spam)
+        name = cleaned_data.get('name', '')
+        message = cleaned_data.get('message', '')
+        
+        if name and message and name.lower() in message.lower()[:50]:
+            # Name appears at the start of message, common in spam
+            pass  # This is actually acceptable
+        
+        return cleaned_data
